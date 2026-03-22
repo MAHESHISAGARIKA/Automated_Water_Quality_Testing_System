@@ -1,43 +1,39 @@
+#include <Wire.h>
+#include <U8x8lib.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <math.h>
 
-// ==========================
-// Pin definitions
-// ==========================
+/* ================= OLED ================= */
+U8X8_SSD1306_128X64_NONAME_HW_I2C oled(U8X8_PIN_NONE);   // 0x3C default
+
+/* ================= PINS ================= */
 const int turbidityPin = A0;
 const int phPin        = A1;
 const int tdsPin       = A2;
+#define ONE_WIRE_BUS   4
 
-#define ONE_WIRE_BUS 4
-
+/* ================= DS18B20 ================= */
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
 
-// ==========================
-// Turbidity calibration
-// ==========================
+/* ================= CONSTANTS ================= */
+#define VREF        5.0
+#define SCOUNT      30
+
+/* ================= TURBIDITY CALIBRATION ================= */
 float clearVoltage = 3.905;
 float dirtyVoltage = 3.847;
 
-// ==========================
-// pH calibration
-// ==========================
+/* ================= pH CALIBRATION ================= */
 float ph_m = 1.0551;
 float ph_c = 0.2647;
 
-// ==========================
-// TDS settings
-// ==========================
-#define VREF 5.0
-#define SCOUNT 30
-
+/* ================= TDS GLOBALS ================= */
 int analogBuffer[SCOUNT];
 int analogBufferTemp[SCOUNT];
 
-// ==========================
-// WQI parameters
-// ==========================
+/* ================= WQI PARAMETERS ================= */
 const float STD_TDS_PPM   = 500.0;
 const float STD_TURB_NTU  = 5.0;
 const float PH_LOW_LIMIT  = 6.5;
@@ -45,26 +41,22 @@ const float PH_HIGH_LIMIT = 8.5;
 const float TEMP_IDEAL_C  = 25.0;
 const float TEMP_MAX_C    = 35.0;
 
-// Weights
 float wPH   = 4.0;
 float wTurb = 4.0;
 float wTDS  = 3.0;
 float wTemp = 1.0;
 
-// ==========================
-// Utility
-// ==========================
+/* ================= UTILITY ================= */
 float clamp100(float x) {
   if (x < 0.0) return 0.0;
   if (x > 100.0) return 100.0;
   return x;
 }
 
-// ==========================
-// Median filter
-// ==========================
+/* ================= MEDIAN FILTER ================= */
 int getMedianNum(int bArray[], int iFilterLen) {
   int bTab[iFilterLen];
+
   for (byte i = 0; i < iFilterLen; i++) {
     bTab[i] = bArray[i];
   }
@@ -89,9 +81,7 @@ int getMedianNum(int bArray[], int iFilterLen) {
   return bTemp;
 }
 
-// ==========================
-// Read temperature
-// ==========================
+/* ================= READ TEMPERATURE ================= */
 float readTemperatureC() {
   sensors.requestTemperatures();
   float tempC = sensors.getTempCByIndex(0);
@@ -103,9 +93,7 @@ float readTemperatureC() {
   return tempC;
 }
 
-// ==========================
-// Read pH
-// ==========================
+/* ================= READ pH ================= */
 float readPH() {
   long sum = 0;
 
@@ -120,12 +108,13 @@ float readPH() {
   float measuredPH = 7.0 + ((2.5 - voltage) / 0.18);
   float correctedPH = (ph_m * measuredPH) + ph_c;
 
+  if (correctedPH < 0) correctedPH = 0;
+  if (correctedPH > 14) correctedPH = 14;
+
   return correctedPH;
 }
 
-// ==========================
-// Read turbidity
-// ==========================
+/* ================= READ TURBIDITY ================= */
 float readTurbidityNTU() {
   long sum = 0;
 
@@ -145,9 +134,7 @@ float readTurbidityNTU() {
   return ntu;
 }
 
-// ==========================
-// Read TDS
-// ==========================
+/* ================= READ TDS ================= */
 float readTDS(float temperatureC) {
   for (int i = 0; i < SCOUNT; i++) {
     analogBuffer[i] = analogRead(tdsPin);
@@ -174,9 +161,7 @@ float readTDS(float temperatureC) {
   return tdsValue;
 }
 
-// ==========================
-// WQI sub-index functions
-// ==========================
+/* ================= WQI SUB-INDICES ================= */
 float q_tds(float tdsPpm) {
   float q = (tdsPpm / STD_TDS_PPM) * 100.0;
   return clamp100(q);
@@ -206,9 +191,7 @@ float q_ph(float ph) {
   return clamp100(q);
 }
 
-// ==========================
-// Compute WQI
-// ==========================
+/* ================= COMPUTE WQI ================= */
 float computeWQI(float ph, float tdsPpm, float ntu, float tempC) {
   float sumW = wPH + wTurb + wTDS + wTemp;
   if (sumW <= 0.0) return 0.0;
@@ -233,6 +216,7 @@ const char* wqiCategory(float wqi) {
   return "POOR";
 }
 
+/* ================= SETUP ================= */
 void setup() {
   Serial.begin(9600);
 
@@ -242,19 +226,28 @@ void setup() {
 
   sensors.begin();
 
-  Serial.println("Water Quality Monitoring System");
-  Serial.println("======================================");
+  oled.begin();
+  oled.setPowerSave(0);
+  oled.setFont(u8x8_font_victoriabold8_r);
+
+  oled.clear();
+  oled.drawString(0, 0, "Water Monitor");
+  oled.drawString(0, 1, "Init OK");
+
+  delay(1000);
 }
 
+/* ================= LOOP ================= */
 void loop() {
-  float temperatureC  = readTemperatureC();
-  float pHValue       = readPH();
-  float turbidityNTU  = readTurbidityNTU();
-  float tdsValue      = readTDS(temperatureC);
+  float temperatureC = readTemperatureC();
+  float pHValue      = readPH();
+  float turbidityNTU = readTurbidityNTU();
+  float tdsValue     = readTDS(temperatureC);
 
   float wqi = computeWQI(pHValue, tdsValue, turbidityNTU, temperatureC);
   const char* category = wqiCategory(wqi);
 
+  /* ---- SERIAL OUTPUT ---- */
   Serial.print("Temperature: ");
   Serial.print(temperatureC, 2);
   Serial.println(" C");
@@ -277,6 +270,30 @@ void loop() {
   Serial.println(category);
 
   Serial.println("--------------------------------------");
+
+  /* ---- OLED OUTPUT ---- */
+  char line1[17], line2[17], line3[17], line4[17], line5[17], line6[17];
+
+  char tbuf[10];
+  char phbuf[10];
+
+  dtostrf(temperatureC, 4, 1, tbuf);
+  dtostrf(pHValue,      4, 2, phbuf);
+
+  snprintf(line1, sizeof(line1), "Temp:%s C", tbuf);
+  snprintf(line2, sizeof(line2), "TDS :%4ldppm", (long)(tdsValue + 0.5));
+  snprintf(line3, sizeof(line3), "NTU :%6ld",   (long)(turbidityNTU + 0.5));
+  snprintf(line4, sizeof(line4), "pH  :%s", phbuf);
+  snprintf(line5, sizeof(line5), "WQI :%6ld",   (long)(wqi + 0.5));
+  snprintf(line6, sizeof(line6), "CAT :%s", category);
+
+  oled.clearLine(0); oled.drawString(0, 0, "Water Monitor");
+  oled.clearLine(2); oled.drawString(0, 2, line1);
+  oled.clearLine(3); oled.drawString(0, 3, line2);
+  oled.clearLine(4); oled.drawString(0, 4, line3);
+  oled.clearLine(5); oled.drawString(0, 5, line4);
+  oled.clearLine(6); oled.drawString(0, 6, line5);
+  oled.clearLine(7); oled.drawString(0, 7, line6);
 
   delay(1000);
 }
